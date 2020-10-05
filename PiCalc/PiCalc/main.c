@@ -50,21 +50,19 @@
 
 extern void vApplicationIdleHook( void );
 
-void vLedBlink(void *pvParameters);
-void vTaskxEulerAlgo(void *pvParameters);
+void vTaskxSomayajiAlgo(void *pvParameters);
 void vTaskxLeibnizAlgo(void *pvParameters);
 void vButtonTask(void *pvParameters);
 void vInitHeartbeatCounter(void);
 void vUserInterface(void);
-//void xSetTime(uint8_t ucDigitToSet, uint8_t ucButtonValue, uint8_t *ucSeconds, uint8_t *ucMinutes, uint8_t *ucHours);
 void vHeartbeat(void);
 
-TaskHandle_t xledTask;
+
 TaskHandle_t xLeibnizAlgo;
 TaskHandle_t xButtonTaskHandle;
 TaskHandle_t xHeartbeatTaskHandle;
 TaskHandle_t xUserInterfaceHandle;
-TaskHandle_t xTaskxEulerAlgo;
+TaskHandle_t xTaskxSomayajiAlgo;
 
 EventGroupHandle_t xGlobalEventGroup;
 
@@ -75,15 +73,8 @@ uint8_t ucClockMinutes = 0;
 
 
 float GlPi = 0;
-int AnzahlDurchlauf = 0;
+uint32_t AnzahlDurchlauf = 0;
 
-typedef enum
-{
-	Leipniz,
-	//SetClock,
-	//SetAlarmClock
-} eAlgoStates;
-eAlgoStates eAlgoStateMachine = Leipniz;
 
 
 
@@ -99,8 +90,7 @@ int main(void)
     vInitDisplay();
     vInitHeartbeatCounter();
 	xGlobalEventGroup = xEventGroupCreate();
-	xTaskCreate(vTaskxEulerAlgo, (const char *) "TaskxEulerAlgo", configMINIMAL_STACK_SIZE+100, NULL, 1, &xTaskxEulerAlgo);
-	xTaskCreate(vLedBlink, (const char *) "ledBlink", configMINIMAL_STACK_SIZE+10, NULL, 2, &xledTask);
+	xTaskCreate(vTaskxSomayajiAlgo, (const char *) "TaskxSomayajiAlgo", configMINIMAL_STACK_SIZE+100, NULL, 1, &xTaskxSomayajiAlgo);
 	xTaskCreate(vTaskxLeibnizAlgo, (const char *) "LeibnizAlgo", configMINIMAL_STACK_SIZE+100, NULL, 1, &xLeibnizAlgo);
 	xTaskCreate(vButtonTask, (const char *) "ButtonTask", configMINIMAL_STACK_SIZE, NULL, 2, &xButtonTaskHandle);
 	xTaskCreate(vHeartbeat, (const char *) "Heartbeat", configMINIMAL_STACK_SIZE, NULL, 3, &xHeartbeatTaskHandle);
@@ -112,22 +102,6 @@ int main(void)
 }
 
 
-void vLedBlink(void *pvParameters) {
-	(void) pvParameters;
-	PORTF.DIRSET = PIN0_bm; //LED1
-	PORTF.OUT = 0x01;
-	uint32_t ulBlinkStatus = 0;
-	for(;;) {
-		xTaskNotifyWait(0, 0xffffffff, &ulBlinkStatus, pdMS_TO_TICKS(5));
-		if (ulBlinkStatus)
-		{
-			PORTF.OUTCLR = 0x01;
-			vTaskDelay(100 / portTICK_RATE_MS);
-			PORTF.OUTSET = 0x01;
-			vTaskDelay(100 / portTICK_RATE_MS);
-		}
-	}
-}
 
 
 void vButtonTask(void *pvParameters) {
@@ -177,7 +151,7 @@ void vInitHeartbeatCounter(void)
 	/* Initializes the Heartbeat timer counter */
 	TCC1.CTRLA |= (0b0101) << TC1_CLKSEL_gp;            // CLKdiv = 64 -> fTimer = 500kHz
 	TCC1.INTCTRLA |= 1 << TC1_OVFINTLVL_gp;             // Overflow interrupt enable at low-level priority
-	TCC1.PER = 4999;                                    // TOP after 5000 counts -> Tp = 1/(500kHz) * 5000 = 10ms
+	TCC1.PER = 499;                                    // TOP after 5000 counts -> Tp = 1/(500kHz) * 5000 = 10ms
 	PMIC.CTRL |= 1 << PMIC_LOLVLEN_bp;                  // enable low-level interrupt
 }
 /*———————————————————–*/
@@ -185,7 +159,7 @@ void vInitHeartbeatCounter(void)
 
 
 /*———————————————————–*/
-uint8_t ucMsCounter = 0;
+uint32_t ucMsCounter = 0;
 void vHeartbeat(void)
 {
     
@@ -222,17 +196,13 @@ void vHeartbeat(void)
         xInterruptOccurred = xTaskNotifyWait(0, 0xffffffff, &ucMsInterruptCounter, pdMS_TO_TICKS(50));
     }
 }
-/*———————————————————–*/
 
 ISR(TCC1_OVF_vect)
 {
     /* Occurs all 10ms */
-    
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    
     xTaskNotifyFromISR(xHeartbeatTaskHandle, ucHeartbeatTimerCounter, eIncrement, &xHigherPriorityTaskWoken);
 }
-/*———————————————————–*/
 
 
 void vUserInterface(void)
@@ -242,72 +212,68 @@ void vUserInterface(void)
 	uint32_t EventBits = 0;	
 	char PiString[11];
 	bool LeibinzRunning = true;
-	bool EulerRunning = false;
-	
-	
-	vTaskSuspend(xTaskxEulerAlgo);
-	
+	bool SomayajiRunning = false;
+	vTaskSuspend(xTaskxSomayajiAlgo);
+	xEventGroupSetBits(xGlobalEventGroup,STOPALGOBUTTON);
 	while (1)
-	{
-		
-		//xEventGroupClearBits(EventBit_4);
-		//xEventGroupClearBits(xGlobalEventGroup,EventBit_1);
-		
-		
+	{	
 		EventBits = xEventGroupGetBits(xGlobalEventGroup);
-
-		if ((EventBits & CHANGEALGO) && LeibinzRunning){
-			vTaskSuspend(xLeibnizAlgo);
-			vTaskResume(xTaskxEulerAlgo);
-			EulerRunning = true;
-			LeibinzRunning = false;
-			xEventGroupClearBits(xGlobalEventGroup,CHANGEALGO);
-			xEventGroupSetBits(xGlobalEventGroup, RESETALGO);
-			//xEventGroupSetBits()
-		}
-		
-		else if((EventBits & CHANGEALGO) && EulerRunning){
-			vTaskSuspend(xTaskxEulerAlgo);
-			vTaskResume(xLeibnizAlgo);
-			EulerRunning = false;
-			LeibinzRunning = true;
-			xEventGroupClearBits(xGlobalEventGroup,CHANGEALGO);
-			xEventGroupSetBits(xGlobalEventGroup, RESETALGO);
-		}
-		
-		
 		xEventGroupSetBits(xGlobalEventGroup,STOPALGO); // Anforderung um Task zu Beenden
 		xEventGroupWaitBits(xGlobalEventGroup,TASKSTOPPED,pdFALSE,pdFALSE,1000000);
-		
+		//Display Output
 		EventBits = xEventGroupGetBits(xGlobalEventGroup);
 		vDisplayClear();
 		vDisplayWriteStringAtPos(0,0,"Pi Calculator");
-		//sprintf(PiString, "%05f" ,GlPi);
-		sprintf(PiString, "%02f" ,GlPi);
-		vDisplayWriteStringAtPos(1,0,"PI:  %s", PiString); // + TaskName
-		sprintf(PiString, "%d" ,AnzahlDurchlauf);
-		vDisplayWriteStringAtPos(2,0,"Steps: %d", PiString); // Format
-		printf(PiString, "%d" ,ucMsCounter);
-		vDisplayWriteStringAtPos(3,0,"mSec: %d", PiString); //Format + korrekte Zeit
-		 
-		if ((GlPi > 3.141589) && (GlPi <= 3.141599)){  // Zu spät
-			xEventGroupSetBits(xGlobalEventGroup,TASKDONE);
+		if (LeibinzRunning) { // Displaying which task is running
+			vDisplayWriteStringAtPos(0,18,"LB");
 		}
-		
+		else{
+			vDisplayWriteStringAtPos(0,17,"KNS");
+		}
+		sprintf(PiString, "%05f",GlPi);
+		vDisplayWriteStringAtPos(1,0,"PI:  %s", PiString);
+		sprintf(PiString, "%lu" ,AnzahlDurchlauf);
+		vDisplayWriteStringAtPos(2,0,"Steps: %s",PiString); 
+		sprintf(PiString, "%lu" ,ucMsCounter);
+		vDisplayWriteStringAtPos(3,0,"mSec:  %s" ,PiString);
+		 	
 		EventBits = xEventGroupGetBits(xGlobalEventGroup);
-		
 		if (!(EventBits & STOPALGOBUTTON) && (!(EventBits & TASKDONE ))){
 			xEventGroupClearBits(xGlobalEventGroup,STOPALGO);
 			xEventGroupClearBits(xGlobalEventGroup,STARTALGO);
 			xEventGroupClearBits(xGlobalEventGroup,TASKSTOPPED);
-			xEventGroupSetBits(xGlobalEventGroup,TASKRESUME); // Anforderung um Task zu fortsetzen
+			xEventGroupSetBits(xGlobalEventGroup,TASKRESUME); // Anforderung um Task zu fortsetzen		
+			}
+		else{
+			vTaskSuspend(xHeartbeatTaskHandle);
 		}
 
 		if ((EventBits & STARTALGO)){
+			vTaskResume(xHeartbeatTaskHandle);
 			xEventGroupClearBits(xGlobalEventGroup,STOPALGOBUTTON);
 			xEventGroupClearBits(xGlobalEventGroup,STARTALGO);
 			xEventGroupSetBits(xGlobalEventGroup,TASKRESUME); // Anforderung um Task zu fortsetzen
 		}
+		
+		EventBits = xEventGroupGetBits(xGlobalEventGroup);
+		if (EventBits & CHANGEALGO){
+			xEventGroupClearBits(xGlobalEventGroup,CHANGEALGO);
+			xEventGroupSetBits(xGlobalEventGroup, RESETALGO);
+			xEventGroupSetBits(xGlobalEventGroup,STOPALGOBUTTON);
+			vTaskResume(xHeartbeatTaskHandle);
+			if (LeibinzRunning){
+				vTaskSuspend(xLeibnizAlgo);
+				vTaskResume(xTaskxSomayajiAlgo);
+				SomayajiRunning = true;
+				LeibinzRunning = false;
+			}
+			else{
+				vTaskSuspend(xTaskxSomayajiAlgo);
+				vTaskResume(xLeibnizAlgo);
+				SomayajiRunning = false;
+				LeibinzRunning = true;
+			}
+		}	
 		vTaskDelay(200 / portTICK_RATE_MS);
 		
 	}
@@ -318,18 +284,23 @@ void vTaskxLeibnizAlgo(void *pvParameters) {
 	float pi=1.0;
 	uint32_t n=3;
 	AnzahlDurchlauf =0;
+	int i=0;
 	int  EventBits;
 	while (1){	
 		EventBits=xEventGroupGetBits(xGlobalEventGroup);
+		//Task Reset
 		if (EventBits & RESETALGO){
+			xEventGroupClearBits(xGlobalEventGroup,TASKDONE);
 			pi=1.0;
+			i=0;
+			ucMsCounter=0;
 			n=3;
 			AnzahlDurchlauf =0;
-			xEventGroupClearBits(xGlobalEventGroup,TASKDONE);
-			xEventGroupClearBits(xGlobalEventGroup,RESETALGO);
+			GlPi = 0.00000;
+			xEventGroupClearBits(xGlobalEventGroup,RESETALGO);	
 		}
-		
-		if ((EventBits & STOPALGO) ){//|| (EventBits & STOPALGOBUTTON)){
+		//Task Stopped else do Calculations
+		if ((EventBits & STOPALGO) ){
 			xEventGroupSetBits(xGlobalEventGroup,TASKSTOPPED);
 			xEventGroupWaitBits(xGlobalEventGroup,TASKRESUME,pdTRUE,pdFALSE,100000);
 		}
@@ -341,16 +312,25 @@ void vTaskxLeibnizAlgo(void *pvParameters) {
 			GlPi = (float)(pi*4);
 			AnzahlDurchlauf++;	
 		}
+		if ((uint32_t)(GlPi*100000)==(uint32_t)(M_PI*100000)){	
+			if (i==1){ 
+				xEventGroupSetBits(xGlobalEventGroup,TASKDONE);
+				xEventGroupSetBits(xGlobalEventGroup,STOPALGO);
+				vTaskSuspend(xHeartbeatTaskHandle);	
+			}
+			else{
+				i++;
+			}
+		}
 	}
 }
 
 
 
-void vTaskxEulerAlgo(void *pvParameters) {
+void vTaskxSomayajiAlgo(void *pvParameters) {
 
-	float piSqr = 1;
-	float pi=1;
-	int n=2;
+	float pi=3;
+	int n=3;
 	AnzahlDurchlauf =0;
 	int  EventBits;
 	
@@ -358,27 +338,32 @@ void vTaskxEulerAlgo(void *pvParameters) {
 		EventBits=xEventGroupGetBits(xGlobalEventGroup);
 		
 		if (EventBits & RESETALGO){
-			float piSqr = 1;
-			int n=2;
-			AnzahlDurchlauf =0;
 			xEventGroupClearBits(xGlobalEventGroup,TASKDONE);
+			pi=3;
+			n=3;
+			AnzahlDurchlauf =0;
+			ucMsCounter=0;
+			GlPi = 0.00000;
 			xEventGroupClearBits(xGlobalEventGroup,RESETALGO);
 		}
 		
-		if ((EventBits & STOPALGO) ){//|| (EventBits & STOPALGOBUTTON)){
+		if ((EventBits & STOPALGO) ){
 			xEventGroupSetBits(xGlobalEventGroup,TASKSTOPPED);
 			xEventGroupWaitBits(xGlobalEventGroup,TASKRESUME,pdTRUE,pdFALSE,100000);
 		}
-		else{
-			piSqr=piSqr+(float)(1.0/pow(n,2));
-			n++;
-			piSqr=piSqr+(float)(1.0/pow(n,2));
-			n++;
-			piSqr=piSqr+(float)(1.0/pow(n,2));
-			n++; 
-			pi = sqrt(piSqr*6);
-			GlPi = (float)(pi);
-			AnzahlDurchlauf++;	
+		else{			
+			pi=pi+(float)(4.0/(pow(n,3)-n));
+			n=n+2;
+			pi=pi-(float)(4.0/(pow(n,3)-n));
+			n=n+2;
+			GlPi=pi;
+			AnzahlDurchlauf++;
+			
+			if ((uint32_t)(GlPi*100000)==(uint32_t)(M_PI*100000)){	//Hält an bei 3.14160
+				xEventGroupSetBits(xGlobalEventGroup,TASKDONE);
+				xEventGroupSetBits(xGlobalEventGroup,STOPALGO);
+				vTaskSuspend(xHeartbeatTaskHandle);		
+			}
 		}
 	};
 }
